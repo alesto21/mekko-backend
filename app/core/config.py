@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     anthropic_model: str = "claude-sonnet-4-5"
     anthropic_max_tokens: int = 1024
 
+    # Feedback (Discord webhook for in-app tilbakemelding)
+    discord_webhook_url: str = ""
+
     # CORS — under utvikling tillater vi alt
     cors_origins: list[str] = ["*"]
 
