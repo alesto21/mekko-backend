@@ -1,8 +1,34 @@
 """AI-mekaniker — Anthropic Claude med bilkontekst."""
+import re
+
 import httpx
 from fastapi import HTTPException
 
 from app.core.config import settings
+
+
+def _strip_markdown(text: str) -> str:
+    """Fjerner markdown-formatering fra Claude-svar.
+
+    Claude bruker av og til markdown selv om vi ber den la være.
+    Vi stripper det her for å sikre rene tekstsvar til appen.
+    """
+    if not text:
+        return text
+    # Bold/italic: **text**, __text__, *text*, _text_
+    text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
+    text = re.sub(r"__(.+?)__", r"\1", text)
+    text = re.sub(r"(?<!\w)\*([^*\n]+?)\*(?!\w)", r"\1", text)
+    text = re.sub(r"(?<!\w)_([^_\n]+?)_(?!\w)", r"\1", text)
+    # Headings: # Heading, ## Heading
+    text = re.sub(r"^#{1,6}\s*", "", text, flags=re.MULTILINE)
+    # Inline code: `text`
+    text = re.sub(r"`([^`]+)`", r"\1", text)
+    # Links: [text](url) -> text
+    text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
+    # Strikethrough: ~~text~~
+    text = re.sub(r"~~(.+?)~~", r"\1", text)
+    return text.strip()
 
 
 SYSTEM_PROMPT = """Du er en erfaren norsk bilmekaniker som hjelper bileiere via en mobilapp som heter MinBil.
@@ -113,4 +139,5 @@ async def chat_with_mechanic(
     content_blocks = data.get("content", [])
     if not content_blocks:
         return "Beklager, jeg fikk ikke noe svar fra AI-en. Prøv igjen."
-    return content_blocks[0].get("text", "")
+    raw = content_blocks[0].get("text", "")
+    return _strip_markdown(raw)
