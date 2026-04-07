@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     project_name: str = "Mekko Backend"
 
     # Vegvesenet
-    vegvesenet_api_key: str
+    vegvesenet_api_key: str = ""
     vegvesenet_base_url: str = (
         "https://akfell-datautlevering.atlas.vegvesen.no/enkeltoppslag/kjoretoydata"
     )

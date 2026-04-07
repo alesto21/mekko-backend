@@ -16,6 +16,11 @@ class VegvesenetClient:
         Returnerer rå JSON-respons fra Vegvesenet.
         Reiser HTTPException ved feil.
         """
+        if not self.api_key:
+            raise HTTPException(
+                status_code=500,
+                detail="VEGVESENET_API_KEY mangler i miljøvariabler",
+            )
         normalized = plate.upper().replace(" ", "").strip()
         if not normalized:
             raise HTTPException(status_code=400, detail="Tomt skiltnummer")
