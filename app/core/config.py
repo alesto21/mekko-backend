@@ -18,6 +18,11 @@ class Settings(BaseSettings):
         "https://akfell-datautlevering.atlas.vegvesen.no/enkeltoppslag/kjoretoydata"
     )
 
+    # Anthropic (AI-mekaniker)
+    anthropic_api_key: str = ""
+    anthropic_model: str = "claude-sonnet-4-5"
+    anthropic_max_tokens: int = 1024
+
     # CORS — under utvikling tillater vi alt
     cors_origins: list[str] = ["*"]
 
