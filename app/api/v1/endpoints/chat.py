@@ -17,6 +17,7 @@ class ChatRequest(BaseModel):
     vehicle: dict[str, Any] = Field(default_factory=dict)
     history: list[ChatMessage] = Field(default_factory=list)
     message: str
+    user_name: str | None = None
 
 
 class ChatResponse(BaseModel):
@@ -30,5 +31,6 @@ async def mechanic(req: ChatRequest):
         vehicle=req.vehicle,
         history=[m.model_dump() for m in req.history],
         user_message=req.message,
+        user_name=req.user_name,
     )
     return ChatResponse(reply=reply)

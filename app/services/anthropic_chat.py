@@ -85,6 +85,7 @@ async def chat_with_mechanic(
     vehicle: dict,
     history: list[dict],
     user_message: str,
+    user_name: str | None = None,
 ) -> str:
     """Send chat-melding til Claude og returner svaret.
 
@@ -97,7 +98,18 @@ async def chat_with_mechanic(
         )
 
     car_context = _build_user_context(vehicle)
-    system = f"{SYSTEM_PROMPT}\n\n--- BILKONTEKST ---\n{car_context}\n--- SLUTT KONTEKST ---"
+    user_context = ""
+    if user_name and user_name.strip():
+        user_context = (
+            f"\n\n--- BRUKER ---\n"
+            f"Navn: {user_name.strip()}\n"
+            f"Tiltale brukeren med fornavnet ved første svar i en samtale (ikke i hver melding).\n"
+            f"--- SLUTT BRUKER ---"
+        )
+    system = (
+        f"{SYSTEM_PROMPT}\n\n--- BILKONTEKST ---\n{car_context}\n"
+        f"--- SLUTT KONTEKST ---{user_context}"
+    )
 
     messages = []
     for msg in history:
