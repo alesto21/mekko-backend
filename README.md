@@ -1,6 +1,6 @@
-# Mekko Backend
+# MinBil Backend
 
-FastAPI-backend for Mekko-appen. Proxyer kall til Statens Vegvesen sin
+FastAPI-backend for MinBil-appen. Proxyer kall til Statens Vegvesen sin
 Kjøretøyopplysninger-API, og er fundamentet for fremtidige funksjoner
 (autentisering, AI-mekaniker, service-historikk).
 

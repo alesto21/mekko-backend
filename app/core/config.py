@@ -10,7 +10,7 @@ class Settings(BaseSettings):
 
     # API
     api_v1_prefix: str = "/api/v1"
-    project_name: str = "Mekko Backend"
+    project_name: str = "MinBil Backend"
 
     # Vegvesenet
     vegvesenet_api_key: str = ""
