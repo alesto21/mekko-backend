@@ -36,3 +36,12 @@ class _RateLimiter:
 
 
 chat_rate_limiter = _RateLimiter()
+
+
+class _ScanRateLimiter(_RateLimiter):
+    """Egen limiter for kvittering-skanning. Free brukere får 5 OCR per måned."""
+
+    FREE_LIMIT_PER_MONTH = 5
+
+
+scan_rate_limiter = _ScanRateLimiter()
