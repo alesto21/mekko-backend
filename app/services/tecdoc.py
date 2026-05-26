@@ -285,14 +285,15 @@ async def resolve_vehicle(vehicle: dict) -> dict:
 # affiliate-parametre når programmene er godkjent.
 # ---------------------------------------------------------------------------
 def shop_links(article_no: str, brand: str) -> list[dict]:
-    q = quote_plus(f"{brand} {article_no}".strip())
+    """Kjøpslenker. Google Shopping treffer den eksakte delen + priser på tvers
+    av norske butikker (stabilt format). Autodoc er affiliate-partner.
+    Erstattes med ekte produktlenker per butikk når affiliate-feeds er på plass.
+    """
+    term = quote_plus(f"{brand} {article_no}".strip())
+    art = quote_plus(article_no.strip())
     return [
-        {"shop": "Autodoc",
-         "url": f"https://www.autodoc.co.no/sok?keyword={q}"},
-        {"shop": "bildeler.no",
-         "url": f"https://www.bildeler.no/sok?q={q}"},
-        {"shop": "Mekonomen",
-         "url": f"https://www.mekster.no/sok?q={q}"},
+        {"shop": "Sammenlign priser", "url": f"https://www.google.com/search?tbm=shop&q={term}"},
+        {"shop": "Autodoc", "url": f"https://www.autodoc.co.no/search?keyword={art}"},
     ]
 
 
