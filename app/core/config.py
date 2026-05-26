@@ -26,6 +26,13 @@ class Settings(BaseSettings):
     # Feedback (Discord webhook for in-app tilbakemelding)
     discord_webhook_url: str = ""
 
+    # TecDoc-katalog (reservedeler/fitment via RapidAPI "auto-parts-catalog")
+    rapidapi_key: str = ""
+    rapidapi_host: str = "auto-parts-catalog.p.rapidapi.com"
+    tecdoc_lang_id: int = 12       # 12 = Norsk
+    tecdoc_country_id: int = 167   # 167 = Norge
+    tecdoc_type_id: int = 1        # 1 = personbiler
+
     # CORS — under utvikling tillater vi alt
     cors_origins: list[str] = ["*"]
 

@@ -52,3 +52,46 @@ class VegvesenetClient:
 
 
 vegvesenet_client = VegvesenetClient()
+
+
+def parse_basic(raw: dict) -> dict:
+    """Plukk ut feltene som trengs for TecDoc-matching fra Vegvesen-rådata."""
+    lst = raw.get("kjoretoydataListe") or []
+    if not lst:
+        raise HTTPException(status_code=404, detail="Tom respons fra Vegvesenet")
+    v = lst[0]
+    td = (
+        v.get("godkjenning", {})
+        .get("tekniskGodkjenning", {})
+        .get("tekniskeData", {})
+    )
+    gen = td.get("generelt", {})
+    merke_liste = gen.get("merke") or []
+    merke = merke_liste[0].get("merke") if merke_liste else None
+    handel = gen.get("handelsbetegnelse") or []
+    modell = handel[0] if handel else None
+
+    motor_liste = td.get("motorOgDrivverk", {}).get("motor") or []
+    motor = motor_liste[0] if motor_liste else {}
+    slagvolum = motor.get("slagvolum")
+    drivstoff = None
+    effekt_kw = None
+    dl = motor.get("drivstoff") or []
+    if dl:
+        drivstoff = (dl[0].get("drivstoffKode") or {}).get("kodeNavn")
+        effekt_kw = dl[0].get("maksNettoEffekt")
+
+    forste = (
+        v.get("forstegangsregistrering", {})
+        .get("registrertForstegangNorgeDato")
+    )
+    return {
+        "plate": (v.get("kjoretoyId") or {}).get("kjennemerke"),
+        "vin": (v.get("kjoretoyId") or {}).get("understellsnummer"),
+        "merke": merke,
+        "modell": modell,
+        "slagvolum": int(slagvolum) if slagvolum else None,
+        "effektKw": float(effekt_kw) if effekt_kw else None,
+        "drivstoff": drivstoff,
+        "forsteRegistrert": forste,
+    }
