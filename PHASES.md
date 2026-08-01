@@ -1,7 +1,7 @@
 # MinBil — Phase Roadmap & Status
 
 This file is kept identical in both repositories that make up MinBil:
-the Flutter client (`Mekko`) and this backend (`mekko-backend`). When a
+the Flutter client (`Mekko`) and the backend (`mekko-backend`). When a
 phase starts, finishes, or changes scope, update both copies together —
 don't let them drift.
 
@@ -9,7 +9,25 @@ Each repo also has its own `ARCHITECTURE.md` describing how that specific
 codebase is structured today. This file is about *what phase the project
 is in and why*, not implementation detail.
 
-Last updated: 2026-08-01 (Phase 1 complete).
+Last updated: 2026-08-01 (Phase 2 complete).
+
+## Architecture direction (read this before touching Phase 2's output)
+
+The shared layer created in Phase 2 (`lib/models/`, `lib/theme/`,
+`lib/config/`) is **temporary, not the end state**. The long-term
+direction is feature-first architecture: vertical slices where each
+feature owns its own models, services, repositories, and widgets, per
+Phase 3 below. Phase 2 exists because pulling out the truly
+ownerless, cross-feature pieces (things every feature already touches -
+`Vehicle`, theme tokens, config) had to happen before any per-feature
+work could start safely, and it was faster and lower-risk to give them
+one shared home first rather than deciding their final per-feature
+destination up front. When Phase 3 vertical slices land, expect
+`lib/models/` to shrink or disappear as truly feature-owned data moves
+into `lib/features/<name>/`, and expect `Vehicle` specifically to need
+a deliberate decision then (it's used by every feature, so it may stay
+shared rather than move into any one feature - that decision is Phase
+3's to make, not pre-empted here).
 
 ## Status at a glance
 
@@ -17,7 +35,7 @@ Last updated: 2026-08-01 (Phase 1 complete).
 |---|---|
 | 0 — Audit and documentation | ✅ Complete |
 | 1 — Foundation (safety net + is_pro fix) | ✅ Complete — tag `phase-1-complete` |
-| 2 — Domain model & shared-layer extraction (client) | Not started |
+| 2 — Domain model & shared-layer extraction (client) | ✅ Complete — temporary shared layer, see above |
 | 3 — Vertical slice extraction, feature by feature (client) | Not started |
 | 4 — Backend persistence | Not started |
 | 5 — User identity (anonymous-first, Apple/Google sign-in later) | Not started |
@@ -104,18 +122,84 @@ Left alone deliberately — these are Phase 2+ territory, not oversights:
 - Generic, non-vehicle-specific service intervals are still hardcoded in
   the parts category UI.
 
-## Phase 2 — Domain model & shared-layer extraction (client) — planned
-Pull models, theme tokens, and config/constants out of `main.dart` first
-— the leaves of the dependency graph, lowest risk, no feature owner.
-Detailed implementation plan to follow when this phase starts, same
-process as Phase 1 (plan first, approval, then small reviewable commits).
+## Phase 2 — Domain model & shared-layer extraction (client) ✅ Complete
+
+### What changed
+Eight small, individually-approved commits on `phase-2-shared-layer`,
+each verified against a fixed Phase 1 analyzer baseline and the full
+test suite before moving to the next:
+
+1. `_ColorTokens`/`_lightTokens`/`_darkTokens`/`MinBilColors` →
+   `lib/theme/minbil_colors.dart`
+2. `TireRegion`/`TireRegionLabel`/`TireSeasonStatus` →
+   `lib/models/tire_season.dart`
+3. `RateLimitException` → `lib/models/rate_limit_exception.dart`
+4. `ChatMessage` → `lib/models/chat_message.dart`
+5. `ServiceType`/`ServiceTypeLabel`/`ServiceEntry` →
+   `lib/models/service_entry.dart`
+6. `ScannedReceipt` → `lib/models/scanned_receipt.dart`
+7. `Vehicle`/`EuStatus`/`titleCase` (renamed from `_titleCase`) →
+   `lib/models/vehicle.dart` - the highest-risk single move, ~366 lines,
+   the app's most pervasively-used class
+8. `kProEntitlementId`/`revenueCatIosApiKey` (renamed from
+   `_revenueCatIosKey`)/`backendBaseUrl` (replacing five duplicated
+   `_backendBase` declarations) → `lib/config/app_config.dart`
+
+Every move was mechanical - no logic, values, JSON keys, enum order,
+color mappings, or thresholds changed. The only renames were the three
+forced by Dart's file-scoped privacy (`_titleCase`, `_revenueCatIosKey`,
+and consolidating `_backendBase`); every rename is documented in its
+commit message with the exact call sites it touched.
+
+**8 new files, 52 new tests** (53 in the suite total, up from 1).
+`main.dart`: 9,532 → 8,896 lines (-636, ~6.7%).
+
+### Why it was changed
+`main.dart` had no internal boundaries at all - every model, every
+service, every screen in one 9,500-line file. Phase 2 pulled out the
+pieces with no feature owner (used across garage, chat, scan, and
+settings alike) so that Phase 3's feature-by-feature work has something
+stable to import from, without deciding yet how those shared pieces
+should ultimately be organized (see "Architecture direction" above).
+
+### Flagged, not moved
+Explicitly identified during planning as feature-coupled despite
+looking like shared models, and left in `main.dart` for Phase 3's Parts
+vertical slice to take: `PartCategory`, `PartShop`, `TecDocPart`,
+`EngineMatch`, `VehicleResolution` - all used exclusively within the
+Parts/Bildeler feature, nowhere else.
+
+### Remaining technical debt (as of Phase 2)
+Everything listed under Phase 1 above still applies. Additions specific
+to Phase 2:
+- `lib/models/service_entry.dart` and `lib/models/vehicle.dart` both
+  import `flutter/material.dart` (`IconData`/`Color`) - an inherited
+  UI/domain mixing, not introduced by this phase and not fixed by it.
+  Worth a decision whether Phase 3 addresses this or accepts it
+  permanently.
+- `main.dart` is still ~8,900 lines. The line-count reduction from
+  Phase 2 was real but modest by design - the bulk of the file is
+  screens/widgets, which is Phase 3's job.
+- State management (`ValueNotifier`s) untouched, as planned -
+  introducing Provider/Riverpod is a separate future decision, not
+  bundled into this relocation.
 
 ## Phase 3 — Vertical slice extraction, feature by feature — planned
-One feature at a time (Settings/Feedback first as the lowest-risk pilot,
-Garage/Parts/AI Mechanic last), each fully extracted — model, service,
-repository, widgets — before moving to the next. State management
-(if Provider/Riverpod is introduced) is a separate, later decision within
-this phase, not bundled with the file moves themselves.
+This is where the long-term feature-first direction actually takes
+shape: one feature at a time (Settings/Feedback first as the
+lowest-risk pilot, Garage/Parts/AI Mechanic last), each fully
+extracted — model, service, repository, widgets — into its own
+`lib/features/<name>/`, before moving to the next. State management
+(if Provider/Riverpod is introduced) is a separate, later decision
+within this phase, not bundled with the file moves themselves.
+
+Two decisions this phase needs to make that Phase 2 deliberately left
+open: whether `Vehicle` (used by every feature) stays in a shared
+location permanently or gets a different resolution, and whether the
+Parts-feature-coupled classes flagged in Phase 2
+(`PartCategory`/`PartShop`/`TecDocPart`/`EngineMatch`/
+`VehicleResolution`) move into `lib/features/parts/` as part of that
+feature's slice.
 
 ## Phase 4 — Backend persistence — planned
 Postgres on Railway. `VehicleConfiguration` schema populated from the
@@ -157,3 +241,5 @@ knowledge engine is exactly where fabricated-looking data creeps in.
 ## Change log
 - 2026-08-01 — Phase 1 complete. Merged to `main` in both repos, tagged
   `phase-1-complete`.
+- 2026-08-01 — Phase 2 complete (client only, no backend changes).
+  8 commits on `phase-2-shared-layer`, pending merge/tag.
