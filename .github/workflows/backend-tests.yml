@@ -1,0 +1,26 @@
+name: Backend tests
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # Matches runtime.txt, so CI runs the same Python Railway does.
+          python-version: "3.12.7"
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Run tests
+        # No secrets required: every outbound call (Vegvesenet, TecDoc,
+        # Anthropic, RevenueCat, Discord) is mocked via respx in the test
+        # suite - see tests/conftest.py.
+        run: pytest -v

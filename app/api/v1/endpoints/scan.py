@@ -2,6 +2,7 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from app.services import revenuecat
 from app.services.anthropic_vision import extract_receipt_data
 from app.services.rate_limit import scan_rate_limiter
 
@@ -13,6 +14,8 @@ class ScanReceiptRequest(BaseModel):
     media_type: str = Field("image/jpeg", description="image/jpeg, image/png, image/webp, image/gif")
     device_id: str | None = None
     is_pro: bool = False
+    # Optional/additive - see ChatRequest.app_user_id in chat.py for why.
+    app_user_id: str | None = None
 
 
 class ScanReceiptResponse(BaseModel):
@@ -48,8 +51,13 @@ async def get_scan_limit(device_id: str):
 @router.post("/receipt", response_model=ScanReceiptResponse)
 async def scan_receipt(req: ScanReceiptRequest):
     """Send et bilde av en kvittering og få strukturert service-data tilbake."""
+    is_pro = req.is_pro
+    if req.app_user_id and revenuecat.verification_enabled():
+        is_pro = await revenuecat.verify_entitlement(req.app_user_id)
+    # else: legacy client-trust path - see chat.py::mechanic for why.
+
     # Rate-limit free brukere
-    if not req.is_pro:
+    if not is_pro:
         if not req.device_id:
             raise HTTPException(
                 status_code=400,
@@ -72,12 +80,12 @@ async def scan_receipt(req: ScanReceiptRequest):
 
     # Tell bare som brukt hvis det faktisk var en kvittering — ikke straff brukeren
     # for å sende noe annet ved en feil
-    if not req.is_pro and req.device_id and result.get("is_receipt"):
+    if not is_pro and req.device_id and result.get("is_receipt"):
         scan_rate_limiter.increment(req.device_id)
 
     used = (
         scan_rate_limiter.get_count(req.device_id)
-        if req.device_id and not req.is_pro
+        if req.device_id and not is_pro
         else 0
     )
     return ScanReceiptResponse(
@@ -90,8 +98,8 @@ async def scan_receipt(req: ScanReceiptRequest):
         confidence=result.get("confidence", "medium"),
         is_receipt=result.get("is_receipt", True),
         used_count=used,
-        limit=scan_rate_limiter.FREE_LIMIT_PER_MONTH if not req.is_pro else 0,
+        limit=scan_rate_limiter.FREE_LIMIT_PER_MONTH if not is_pro else 0,
         remaining=scan_rate_limiter.remaining(req.device_id)
-        if req.device_id and not req.is_pro
+        if req.device_id and not is_pro
         else 999,
     )
