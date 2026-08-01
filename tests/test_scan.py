@@ -95,20 +95,118 @@ def test_scan_receipt_free_user_hits_limit_after_five_scans(
     assert res.status_code == 429
 
 
-def test_scan_receipt_pro_flag_bypasses_limit_with_no_server_verification(
+def test_scan_receipt_legacy_request_without_app_user_id_retains_old_behavior(
     client, respx_mock, device_id
 ):
-    """Same gap as chat.py, documented separately here because scan.py
-    enforces it independently (its own rate limiter, its own is_pro
-    check) — Work Item C needs to close both call sites, not just one.
+    """Renamed from documenting a gap to documenting the preserved legacy
+    path — see test_chat.py's equivalent test for the full explanation.
+    scan.py enforces this independently of chat.py (its own rate limiter,
+    its own is_pro check), so it needs its own coverage, not just chat's.
     """
     respx_mock.post(ANTHROPIC_URL).mock(return_value=_anthropic_vision_reply())
     body = {
         "image_base64": FAKE_IMAGE_BASE64,
         "device_id": device_id,
         "is_pro": True,
+        # no app_user_id -> legacy path
     }
     for _ in range(7):  # comfortably more than the free limit of 5
+        res = client.post("/api/v1/scan/receipt", json=body)
+        assert res.status_code == 200
+
+
+def test_scan_receipt_forged_is_pro_with_non_pro_app_user_id_does_not_bypass_limit(
+    client, respx_mock, device_id, monkeypatch
+):
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "revenuecat_secret_key", "test-revenuecat-secret")
+    respx_mock.post(ANTHROPIC_URL).mock(return_value=_anthropic_vision_reply())
+    respx_mock.get("https://api.revenuecat.com/v1/subscribers/forged-user").mock(
+        return_value=httpx.Response(200, json={"subscriber": {"entitlements": {}}})
+    )
+    body = {
+        "image_base64": FAKE_IMAGE_BASE64,
+        "device_id": device_id,
+        "is_pro": True,  # forged
+        "app_user_id": "forged-user",
+    }
+    for _ in range(5):
+        res = client.post("/api/v1/scan/receipt", json=body)
+        assert res.status_code == 200
+
+    res = client.post("/api/v1/scan/receipt", json=body)
+    assert res.status_code == 429
+
+
+def test_scan_receipt_verified_active_entitlement_gets_pro_access(
+    client, respx_mock, device_id, monkeypatch
+):
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "revenuecat_secret_key", "test-revenuecat-secret")
+    respx_mock.post(ANTHROPIC_URL).mock(return_value=_anthropic_vision_reply())
+    respx_mock.get("https://api.revenuecat.com/v1/subscribers/real-pro-user").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "subscriber": {
+                    "entitlements": {"pro_access": {"expires_date": None}}
+                }
+            },
+        )
+    )
+    body = {
+        "image_base64": FAKE_IMAGE_BASE64,
+        "device_id": device_id,
+        "is_pro": True,
+        "app_user_id": "real-pro-user",
+    }
+    for _ in range(7):  # would 429 at free-tier limits if not verified as pro
+        res = client.post("/api/v1/scan/receipt", json=body)
+        assert res.status_code == 200
+
+
+def test_scan_receipt_revenuecat_outage_falls_back_to_free_tier_not_unlimited(
+    client, respx_mock, device_id, monkeypatch
+):
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "revenuecat_secret_key", "test-revenuecat-secret")
+    respx_mock.post(ANTHROPIC_URL).mock(return_value=_anthropic_vision_reply())
+    respx_mock.get("https://api.revenuecat.com/v1/subscribers/outage-user").mock(
+        side_effect=httpx.ConnectError("RevenueCat is down")
+    )
+    body = {
+        "image_base64": FAKE_IMAGE_BASE64,
+        "device_id": device_id,
+        "is_pro": True,
+        "app_user_id": "outage-user",
+    }
+    for _ in range(5):
+        res = client.post("/api/v1/scan/receipt", json=body)
+        assert res.status_code == 200  # not hard-failed
+
+    res = client.post("/api/v1/scan/receipt", json=body)
+    assert res.status_code == 429  # not left unlimited either
+
+
+def test_scan_receipt_kill_switch_falls_back_to_legacy_trust_when_secret_key_unset(
+    client, respx_mock, device_id, monkeypatch
+):
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "revenuecat_secret_key", "")
+    respx_mock.post(ANTHROPIC_URL).mock(return_value=_anthropic_vision_reply())
+    # No route registered for api.revenuecat.com: if the kill switch
+    # didn't work, this would fail via respx instead of silently passing.
+    body = {
+        "image_base64": FAKE_IMAGE_BASE64,
+        "device_id": device_id,
+        "is_pro": True,
+        "app_user_id": "irrelevant-user",
+    }
+    for _ in range(7):
         res = client.post("/api/v1/scan/receipt", json=body)
         assert res.status_code == 200
 

@@ -24,7 +24,7 @@ from fastapi.testclient import TestClient
 
 from app.core.config import settings
 from app.main import app
-from app.services import tecdoc
+from app.services import revenuecat, tecdoc
 
 
 @pytest.fixture
@@ -91,6 +91,16 @@ def clear_tecdoc_cache():
     tecdoc._cache.clear()
     yield
     tecdoc._cache.clear()
+
+
+@pytest.fixture(autouse=True)
+def clear_revenuecat_cache():
+    """Same reasoning as clear_tecdoc_cache above, for
+    revenuecat.py's module-level entitlement cache.
+    """
+    revenuecat._cache.clear()
+    yield
+    revenuecat._cache.clear()
 
 
 @pytest.fixture(autouse=True)
