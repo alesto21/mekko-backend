@@ -9,7 +9,7 @@ Each repo also has its own `ARCHITECTURE.md` describing how that specific
 codebase is structured today. This file is about *what phase the project
 is in and why*, not implementation detail.
 
-Last updated: 2026-08-01 (Phase 2 complete).
+Last updated: 2026-08-02 (Phase 3A complete).
 
 ## Architecture direction (read this before touching Phase 2's output)
 
@@ -36,7 +36,7 @@ shared rather than move into any one feature - that decision is Phase
 | 0 — Audit and documentation | ✅ Complete |
 | 1 — Foundation (safety net + is_pro fix) | ✅ Complete — tag `phase-1-complete` |
 | 2 — Domain model & shared-layer extraction (client) | ✅ Complete — temporary shared layer, see above |
-| 3 — Vertical slice extraction, feature by feature (client) | Not started |
+| 3 — Vertical slice extraction, feature by feature (client) | 🟡 In progress — 3A complete, see below |
 | 4 — Backend persistence | Not started |
 | 5 — User identity (anonymous-first, Apple/Google sign-in later) | Not started |
 | 6 — Vehicle Knowledge Engine v1 | Not started |
@@ -183,8 +183,21 @@ to Phase 2:
 - State management (`ValueNotifier`s) untouched, as planned -
   introducing Provider/Riverpod is a separate future decision, not
   bundled into this relocation.
+- **`themeModeNotifier` has no effect on the app's actual rendered
+  theme.** `MinBilApp.build()` hardcodes `Brightness.light` and never
+  reads `themeModeNotifier` or sets `MaterialApp.themeMode`/`darkTheme`
+  - so picking Light/Dark/System in the Appearance (`UtseendeScreen`)
+  settings screen persists the choice via `SettingsService.setThemeMode`
+  and updates `themeModeNotifier.value`, but nothing downstream ever
+  acts on either, and the app always renders in light mode regardless
+  of the selection. Discovered while tracing dependencies for the Phase
+  3A plan (Settings/Profile/Feedback), not introduced by any phase's
+  changes - pre-existing. Not fixed here; fixing it is a behavior
+  change (wiring `MaterialApp.themeMode` to the notifier and building a
+  dark `ThemeData`), which is explicitly out of scope for a mechanical
+  relocation phase. Needs a deliberate decision on when to address it.
 
-## Phase 3 — Vertical slice extraction, feature by feature — planned
+## Phase 3 — Vertical slice extraction, feature by feature — in progress
 This is where the long-term feature-first direction actually takes
 shape: one feature at a time (Settings/Feedback first as the
 lowest-risk pilot, Garage/Parts/AI Mechanic last), each fully
@@ -193,13 +206,111 @@ extracted — model, service, repository, widgets — into its own
 (if Provider/Riverpod is introduced) is a separate, later decision
 within this phase, not bundled with the file moves themselves.
 
-Two decisions this phase needs to make that Phase 2 deliberately left
-open: whether `Vehicle` (used by every feature) stays in a shared
-location permanently or gets a different resolution, and whether the
-Parts-feature-coupled classes flagged in Phase 2
+Order: **3A Settings/Profile/Feedback** (below, complete) → 3B
+Onboarding → 3C Notifications → 3D Garage/Service Log → 3E Parts → 3F
+AI Mechanic.
+
+Two decisions this phase still needs to make, deliberately left open
+since Phase 2: whether `Vehicle` (used by every feature) stays in a
+shared location permanently or gets a different resolution, and
+whether the Parts-feature-coupled classes flagged in Phase 2
 (`PartCategory`/`PartShop`/`TecDocPart`/`EngineMatch`/
 `VehicleResolution`) move into `lib/features/parts/` as part of that
-feature's slice.
+feature's slice. Neither was touched by 3A.
+
+### Phase 3A — Settings/Profile/Feedback vertical slice ✅ Complete
+
+**What changed.** 10 commits on `phase-3a-settings-feature` (9 planned
+extraction commits + 1 approved mid-phase prep commit), each verified
+against the Phase 2 analyzer baseline and the full test suite before
+moving to the next:
+
+1. `_SettingsSection`/`_SettingsTile`/`_SettingsToggleTile`/`_ThemeOptionTile`
+   (renamed public, forced by cross-file sharing) →
+   `lib/features/settings/widgets/settings_tiles.dart`
+2. `FeedbackService` → `lib/features/settings/services/feedback_service.dart`
+3. `PersonvernScreen` + `_PrivacyParagraph` →
+   `lib/features/settings/screens/personvern_screen.dart`
+4. `ProfilScreen` + `_ProfileField` →
+   `lib/features/settings/screens/profil_screen.dart`
+5. `UtseendeScreen` →
+   `lib/features/settings/screens/utseende_screen.dart` — moved
+   as-is; **still unreachable**, see below
+6. `SprakScreen` → `lib/features/settings/screens/sprak_screen.dart`
+7. `VarslingerScreen` → `lib/features/settings/screens/varslinger_screen.dart`
+8. **Prep commit (not in the original 9-item plan, approved
+   separately mid-phase):** `_FormLabel`/`_ErrorBox` promoted from
+   private to public `FormLabel`/`ErrorBox` in
+   `lib/shared/widgets/form_helpers.dart`. Forced because
+   `FeedbackScreen` (moving next) shared these two trivial widgets
+   with code that wasn't moving yet (another screen, and the
+   still-embedded service-entry form) — Dart's file-scoped privacy
+   meant `FeedbackScreen` couldn't take a private copy without either
+   duplicating or promoting them. Promoted, matching the Phase 2
+   shared-layer pattern rather than duplicating.
+9. `FeedbackScreen` → `lib/features/settings/screens/feedback_screen.dart`
+10. `InnstillingerScreen`/`_InnstillingerScreenState`/`_ProBanner`/
+    `_ProActiveBanner`/`_ProfileHeader`/`_themeModeLabel` (dead, moved
+    as-is) → `lib/features/settings/screens/innstillinger_screen.dart`
+    — the hub screen; the point where `main.dart` finally lost every
+    settings-specific import
+
+Every move was mechanical — no logic, copy, layout, styling,
+persistence keys, or navigation targets changed. `main.dart`: 8,896 →
+7,177 lines (**-1,719, ~19%**). Test suite: 26 → **72 tests**
+(20 new files across the two commits above plus the 7 extraction
+commits' own test files).
+
+**Why it was changed.** Settings/Profile/Feedback was chosen as the
+pilot vertical slice because it's the lowest-risk corner of the app:
+no real-time data, no payment flow, mostly `SharedPreferences` reads
+and simple navigation. Proving the feature-first pattern here first —
+including the messy parts, like the `FormLabel`/`ErrorBox` sharing
+conflict — de-risks the harder slices (3D Garage, 3E Parts, 3F AI
+Mechanic) that come later.
+
+**Temporary two-way imports (accepted, not a defect).** Every
+extracted settings screen still imports symbols back from `main.dart`
+via `show` clauses, because the services and global notifiers those
+screens depend on (`SettingsService`, `SubscriptionService`,
+`NotificationService`, `Garage`, `ServiceLog`, `isProNotifier`,
+`tireRegionNotifier`, `PaywallScreen`) haven't been extracted
+themselves — that's later slices' job (`NotificationService` is 3C,
+`Garage`/`ServiceLog` are 3D). This two-way dependency between
+`main.dart` and `lib/features/settings/` is a deliberate, temporary
+consequence of extracting one feature while its shared dependencies
+still live in `main.dart` — Dart permits it without error, and it's
+expected to shrink and eventually disappear as those services move in
+their own future slices, not something to "fix" now.
+
+**Findings from Phase 3A (pre-existing, not introduced by it):**
+- **`UtseendeScreen` is unreachable.** No navigation anywhere in the
+  app (production or otherwise) constructs it — confirmed by grepping
+  every commit's diff, including this one, for `UtseendeScreen(`.
+  Moved verbatim in Commit 5 without adding a navigation path, per
+  explicit instruction not to make it reachable as a side effect of
+  relocation. Still true after Phase 3A completes.
+- **`themeModeNotifier` still has no effect on the app's rendered
+  theme** — see the full description under Phase 2's remaining debt
+  above. Unchanged by Phase 3A; `InnstillingerScreen` and
+  `UtseendeScreen` both still just persist the choice and bump the
+  notifier, and nothing downstream reads it.
+- **`SubscriptionService.isPro()` never resolves inside a
+  `testWidgets` test when `Purchases.configure()` hasn't been
+  called** — discovered writing `innstillinger_screen_test.dart`.
+  Outside a widget test it resolves in ~2ms (caught
+  `MissingPluginException`, verified with a standalone probe); inside
+  one, it hangs indefinitely (confirmed with real multi-second
+  wall-clock waits, not just a `pumpAndSettle` timeout). Because
+  `_loadSettings()` calls `isPro()` last and is fire-and-forget from
+  `initState()`, this doesn't hang the test itself — it just means
+  `InnstillingerScreen`'s `_loadSettings()`-derived state (profile
+  name/email, notifications flag, tire region, isPro) can only be
+  verified against pre-load default values in any widget test that
+  mounts it, never the `SharedPreferences`-loaded ones. No DI seam
+  exists to fix this without changing production code; out of scope
+  for a mechanical relocation phase, left as a finding for whoever
+  next needs to unit-test Pro-gated UI.
 
 ## Phase 4 — Backend persistence — planned
 Postgres on Railway. `VehicleConfiguration` schema populated from the
@@ -242,4 +353,10 @@ knowledge engine is exactly where fabricated-looking data creeps in.
 - 2026-08-01 — Phase 1 complete. Merged to `main` in both repos, tagged
   `phase-1-complete`.
 - 2026-08-01 — Phase 2 complete (client only, no backend changes).
-  8 commits on `phase-2-shared-layer`, pending merge/tag.
+  8 commits on `phase-2-shared-layer`, merged to `main` and tagged
+  `phase-2-complete`.
+- 2026-08-02 — Phase 3A (Settings/Profile/Feedback) complete (client
+  only). 11 commits on `phase-3a-settings-feature`, merged to `main`
+  and tagged `phase-3a-complete`.
+  `main.dart`: 8,896 → 7,177 lines. Test suite: 26 → 72 tests. Phase
+  3B (Onboarding) not started.
