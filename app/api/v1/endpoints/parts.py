@@ -33,3 +33,12 @@ async def parts(vehicle_id: int, app_category: str):
     """Artikler (deler som passer) for én app-kategori, f.eks. «olje»."""
     items = await tecdoc.parts_for_category(vehicle_id, app_category)
     return {"category": app_category, "count": len(items), "articles": items}
+
+
+@router.get("/articles/{article_id}/specifications")
+async def specifications(article_id: int):
+    """Tekniske spesifikasjoner for én artikkel. Kun for detaljvisning --
+    kalles aldri fra listevisninger. Tom liste (ikke feil) hvis katalogen
+    ikke har spesifikasjoner for denne artikkelen."""
+    specs = await tecdoc.specifications_for_article(article_id)
+    return {"articleId": article_id, "specifications": specs}

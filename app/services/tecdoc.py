@@ -10,6 +10,7 @@ Kjeden:
 
 Resultater caches i minne for å spare RapidAPI-kvote (gratis = 100 kall/mnd).
 """
+import logging
 import re
 from urllib.parse import quote_plus
 
@@ -17,6 +18,8 @@ import httpx
 from fastapi import HTTPException
 
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 # App-kategori (samme id-er som _partCategories i Flutter-appen) -> TecDoc
 # productGroup-id-er. En app-kategori kan dekke flere TecDoc-grupper.
@@ -41,13 +44,17 @@ CATEGORY_MAP: dict[str, list[int]] = {
     # spylervaeske, dekk, felger = universelle/ikke-fitment -> ikke via TecDoc
 }
 
-# Vegvesen drivstoff -> TecDoc fuelType (delstreng-match, lowercase)
-_FUEL_MAP = {
-    "bensin": "petrol",
-    "diesel": "diesel",
-    "elektrisk": "electric",
-    "el": "electric",
-    "hybrid": "petrol",   # ofte ført som petrol/hybrid i TecDoc
+# Vegvesen drivstoff -> mulige TecDoc fuelType-stavemåter (delstreng-match,
+# lowercase). Katalogens ekte fuelType er ikke pålitelig engelsk -- bensin
+# kommer f.eks. tilbake som "Bensin" (norsk), ikke "Petrol", bekreftet mot
+# ekte data. Diesel har historisk "virket" bare fordi "Diesel" staves likt
+# på begge språk, ikke fordi feltet faktisk er engelsk.
+_FUEL_SYNONYMS = {
+    "bensin": ("bensin", "petrol"),
+    "diesel": ("diesel",),
+    "elektrisk": ("electric", "elektrisk", "ev"),
+    "el": ("electric", "elektrisk", "ev"),
+    "hybrid": ("hybrid", "bensin", "petrol"),
 }
 
 _IMG_BASE = "https://fsn1.your-objectstorage.com/tecdoc2025/media_files/images/"
@@ -129,6 +136,20 @@ class TecDocClient:
         )
         return d.get("articles", []) if isinstance(d, dict) else []
 
+    async def specifications(self, article_id: int) -> list[dict]:
+        """Rå spesifikasjoner for en artikkel. Cachet av `_get()` som alt
+        annet her -- path inkluderer article_id, så caching er alt per
+        artikkel uten noe ekstra kode."""
+        d = await self._get(
+            f"/articles/selection-of-all-specifications-criterias-for-the-article"
+            f"/article-id/{article_id}/lang-id/{self.lang}/country-filter-id/{self.country}"
+        )
+        if isinstance(d, list):
+            return d
+        if isinstance(d, dict):
+            return _first_list(d)
+        return []
+
 
 def _first_list(d: dict) -> list:
     for v in d.values():
@@ -150,14 +171,37 @@ def _year(vehicle: dict) -> int | None:
     return vehicle.get("aarsmodell")
 
 
+# Kjente merkenavn der Vegvesen og katalogen bruker helt ulike stavemåter
+# uten felles delstreng (f.eks. "VOLKSWAGEN" vs. katalogens "VW" -- verken
+# inneholder den andre, så delstreng-fallback under kan aldri finne den).
+# Bekreftet mot ekte katalogdata 2026-08: katalogen har KUN "VW", ikke
+# "VOLKSWAGEN" i noen form.
+_MANUFACTURER_ALIASES: dict[str, str] = {
+    "VOLKSWAGEN": "VW",
+}
+_MANUFACTURER_ALIASES_REVERSE = {v: k for k, v in _MANUFACTURER_ALIASES.items()}
+
+
 def _match_manufacturer(merke: str, mfrs: list[dict]) -> dict | None:
     target = _norm(merke)
     if not target:
         return None
-    exact = [m for m in mfrs if _norm(m.get("manufacturerName")) == target]
+
+    # Prøv target selv og eventuelle kjente alias (begge retninger) mot
+    # eksakt treff først, før vi faller tilbake til delstreng-matching.
+    exact_candidates = {target}
+    if target in _MANUFACTURER_ALIASES:
+        exact_candidates.add(_norm(_MANUFACTURER_ALIASES[target]))
+    if target in _MANUFACTURER_ALIASES_REVERSE:
+        exact_candidates.add(_norm(_MANUFACTURER_ALIASES_REVERSE[target]))
+
+    exact = [
+        m for m in mfrs
+        if _norm(m.get("manufacturerName")) in exact_candidates
+    ]
     if exact:
         return exact[0]
-    # delstreng (f.eks. "VW" / "VOLKSWAGEN"), foretrekk korteste navn
+    # delstreng (f.eks. "MERCEDES" / "MERCEDES-BENZ"), foretrekk korteste navn
     partial = [
         m for m in mfrs
         if target in _norm(m.get("manufacturerName"))
@@ -167,23 +211,50 @@ def _match_manufacturer(merke: str, mfrs: list[dict]) -> dict | None:
     return partial[0] if partial else None
 
 
+def _base_name(name: str | None) -> str:
+    """Fjern en avsluttende parentes med chassiskode, f.eks.
+    "GOLF VI (5K1)" -> "GOLF VI". Brukes for eksakt-tier matching under."""
+    return re.sub(r"\s*\([^)]*\)\s*$", "", name or "").strip()
+
+
+def _year_matches(m: dict, year: int | None) -> bool:
+    if not year:
+        return True
+    yf = (m.get("modelYearFrom") or "0000")[:4]
+    yt = (m.get("modelYearTo") or "9999")[:4]
+    return yf.isdigit() and int(yf) <= year and (not yt.isdigit() or year <= int(yt))
+
+
 def _candidate_models(modell: str, merke: str, year: int | None,
                       models: list[dict]) -> list[dict]:
     mod = _norm(modell)
     mrk = _norm(merke)
     if mod.startswith(mrk):           # "HYUNDAI I20" -> "I20"
         mod = mod[len(mrk):]
+    if not mod:
+        return []
+
+    # Tier 1: eksakt treff mot modellnavnet uten chassiskode-parentesen,
+    # f.eks. target "GOLF VI" treffer "GOLF VI (5K1)" men IKKE "GOLF VI
+    # Variant (AJ5)" eller "GOLF PLUS V (5M1, 521)". Brukes bare når
+    # Vegvesen-modellnavnet er spesifikt nok til å være utvetydig alene.
+    exact = [
+        m for m in models
+        if _norm(_base_name(m.get("modelName"))) == mod and _year_matches(m, year)
+    ]
+    if exact:
+        return exact
+
+    # Tier 2: eksisterende delstreng-fallback (uendret oppførsel) -- brukes
+    # når Vegvesen-modellnavnet er generisk (f.eks. "GOLF") og flere ekte
+    # modeller er reelt sett like sannsynlige.
     out = []
     for m in models:
         name = _norm(m.get("modelName"))
-        if not (mod and (mod in name or name.startswith(mod))):
+        if not (mod in name or name.startswith(mod)):
             continue
-        if year:
-            yf = (m.get("modelYearFrom") or "0000")[:4]
-            yt = (m.get("modelYearTo") or "9999")[:4]
-            if not (yf.isdigit() and int(yf) <= year and
-                    (not yt.isdigit() or year <= int(yt))):
-                continue
+        if not _year_matches(m, year):
+            continue
         out.append(m)
     return out
 
@@ -210,8 +281,9 @@ def _score_engine(e: dict, slagvolum: int | None, kw: float | None,
         elif abs(cc - slagvolum) <= 40:
             score += 20
     if fuel:
-        want = _FUEL_MAP.get((fuel or "").strip().lower(), "")
-        if want and want in (e.get("fuelType") or "").lower():
+        wants = _FUEL_SYNONYMS.get((fuel or "").strip().lower(), ())
+        fuel_lower = (e.get("fuelType") or "").lower()
+        if wants and any(w in fuel_lower for w in wants):
             score += 30
     if year:
         sf = (e.get("constructionIntervalStart") or "0000")[:4]
@@ -250,13 +322,21 @@ async def resolve_vehicle(vehicle: dict) -> dict:
 
     mfr = _match_manufacturer(merke, await client.manufacturers())
     if not mfr:
+        logger.info("resolve_vehicle: fant ikke merke=%r i TecDoc", merke)
         raise HTTPException(404, f"Fant ikke merket «{merke}» i TecDoc")
+    logger.info(
+        "resolve_vehicle: merke=%r -> manufacturerId=%s (%s)",
+        merke, mfr["manufacturerId"], mfr["manufacturerName"],
+    )
 
     models = await client.models(mfr["manufacturerId"])
     cands = _candidate_models(modell, merke, year, models)
     if not cands:                       # fall tilbake uten år-filter
         cands = _candidate_models(modell, merke, None, models)
     if not cands:
+        logger.info(
+            "resolve_vehicle: fant ingen modell for modell=%r merke=%r", modell, merke
+        )
         raise HTTPException(404, f"Fant ingen modell «{modell}» for {merke} i TecDoc")
 
     scored: list[tuple[int, dict]] = []
@@ -264,14 +344,32 @@ async def resolve_vehicle(vehicle: dict) -> dict:
         for e in await client.engine_types(m["modelId"]):
             scored.append((_score_engine(e, slagvolum, kw, fuel, year), e))
     if not scored:
+        logger.info("resolve_vehicle: fant ingen motorvarianter for cands=%r",
+                     [m.get("modelName") for m in cands])
         raise HTTPException(404, "Fant ingen motorvarianter i TecDoc")
-    scored.sort(key=lambda t: t[0], reverse=True)
+
+    # Sorter på synkende score; ved eksakt likhet foretrekk det korteste/
+    # enkleste modellnavnet som standardvalg (f.eks. "GOLF VI (5K1)" foran
+    # "GOLF PLUS V (5M1, 521)") -- ren tie-break, endrer ikke `confident`.
+    scored.sort(key=lambda t: (-t[0], len(t[1].get("modelName") or "")))
 
     best_score, best = scored[0]
     top = [e for s, e in scored if s >= best_score - 20][:6]
     confident = best_score >= 120 and (
         len(scored) == 1 or scored[1][0] <= best_score - 40
     )
+    if confident:
+        logger.info(
+            "resolve_vehicle: confident match vehicleId=%s score=%s",
+            best.get("vehicleId"), best_score,
+        )
+    else:
+        rejected = [(s, e.get("vehicleId"), e.get("modelName")) for s, e in scored[1:6]]
+        logger.info(
+            "resolve_vehicle: NOT confident, default vehicleId=%s score=%s, "
+            "near-tied candidates=%r",
+            best.get("vehicleId"), best_score, rejected,
+        )
     return {
         "vehicleId": best.get("vehicleId"),
         "match": _engine_brief(best),
@@ -348,3 +446,33 @@ async def available_categories(vehicle_id: int) -> list[str]:
         app_cat for app_cat, ids in CATEGORY_MAP.items()
         if any(i in present for i in ids)
     ]
+
+
+# ---------------------------------------------------------------------------
+# Tekniske spesifikasjoner -- lastes kun når brukeren åpner en artikkel i
+# detalj (aldri i lister). Feltnavnene katalogen returnerer varierer helt
+# fritt per artikkeltype (en oljefilterartikkel og en bremseklosseartikkel
+# har ingen felles skjema) -- vi normaliserer derfor til en stabil
+# {label, value}-kontrakt i stedet for å eksponere katalogens rå feltnavn
+# direkte til Flutter, og filtrerer bort ugyldige/tomme oppføringer her slik
+# at appen aldri trenger å håndtere rå API-uregelmessigheter selv.
+# ---------------------------------------------------------------------------
+def _normalize_specifications(raw: list[dict]) -> list[dict]:
+    out: list[dict] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        label = item.get("criteriaName") or item.get("label") or item.get("name")
+        value = item.get("criteriaValue")
+        if value is None:
+            value = item.get("value")
+        if not label or value in (None, ""):
+            continue
+        out.append({"label": str(label).strip(), "value": str(value).strip()})
+    return out
+
+
+async def specifications_for_article(article_id: int) -> list[dict]:
+    """Normaliserte tekniske spesifikasjoner for én artikkel."""
+    raw = await client.specifications(article_id)
+    return _normalize_specifications(raw)
