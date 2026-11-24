@@ -23,4 +23,16 @@ jobs:
         # No secrets required: every outbound call (Vegvesenet, TecDoc,
         # Anthropic, RevenueCat, Discord) is mocked via respx in the test
         # suite - see tests/conftest.py.
+        #
+        # The Vegvesenet and TecDoc clients read their API key once, at
+        # import time, so conftest's fake_api_keys fixture (which patches
+        # `settings` later) never reaches them. Locally the real .env
+        # supplies a key; in CI there is no .env, the key is empty, and
+        # those endpoints return 500. Dummy values here make CI behave
+        # like a developer machine. They are never sent anywhere: respx
+        # blocks every outbound request.
+        env:
+          VEGVESENET_API_KEY: ci-dummy-key
+          RAPIDAPI_KEY: ci-dummy-key
+          ANTHROPIC_API_KEY: ci-dummy-key
         run: pytest -v
